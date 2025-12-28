@@ -1,0 +1,4 @@
+int16 scenario_index
+---
+bool success
+string message

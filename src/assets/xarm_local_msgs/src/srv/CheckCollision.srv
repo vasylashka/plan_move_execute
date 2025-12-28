@@ -1,0 +1,4 @@
+float32[] joint_positions
+---
+bool collision_detected
+string message

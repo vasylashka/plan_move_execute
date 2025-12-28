@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""
-xArm Planning Scene (Calculation Engine)
-- SYNC: Subscribes to /xarm/joint_states to mirror the Real/Twin robot.
-- MAP: Loads obstacles from scenarios.json.
-- QUERIES: Provides services for 'Check Collision' and 'Get APF Distances'.
-"""
-
 import rclpy
 from rclpy.node import Node
 import pybullet as p
@@ -14,20 +6,18 @@ import json
 import numpy as np
 from threading import Lock
 from sensor_msgs.msg import JointState
-from xarm_msgs.srv import MoveJoint, GetFloat32List
+from xarm_local_msgs.srv import GetApfDistances, LoadScenario, CheckCollision
+from xarm_local_msgs.msg import ApfLinkData
 
 
-# We will use GetFloat32List to return [dist, dx, dy, dz] for APF
 
 class XArmPlanningScene(Node):
     def __init__(self):
         super().__init__('xarm_planning_scene')
 
-        # ===== CONFIG =====
         self.declare_parameter('urdf_path', '/home/ros2_ws/plan_move_execute/src/assets/models/xarm7.urdf')
         self.urdf_path = self.get_parameter('urdf_path').value
 
-        # Load Scenarios
         try:
             with open("scenarios.json", "r") as f:
                 self.scenarios = json.load(f)
@@ -35,21 +25,16 @@ class XArmPlanningScene(Node):
             self.scenarios = []
             self.get_logger().warn("scenarios.json not found!")
 
-        # ===== PYBULLET (HEADLESS) =====
-        # We use DIRECT mode (no GUI) because this is just a calculation engine
         self.client = p.connect(p.GUI)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
 
-        # Load Static World
         self.plane_id = p.loadURDF("plane.urdf")
         self.robot_id = p.loadURDF(self.urdf_path, [0, 0, 0], useFixedBase=True)
 
-        # Internal State
         self.sim_lock = Lock()
         self.obstacle_ids = []
         self.current_joints = [0.0] * 7
 
-        # Map Joints
         self.arm_indices = []
         for i in range(p.getNumJoints(self.robot_id)):
             if "joint" in p.getJointInfo(self.robot_id, i)[1].decode('utf-8'):
@@ -58,22 +43,14 @@ class XArmPlanningScene(Node):
 
         # ===== ROS INTERFACE =====
 
-        # 1. INPUT: Sync with Real Robot
         self.create_subscription(JointState, '/xarm/joint_states', self._sync_callback, 10)
 
-        # 2. INPUT: Load Scenario Command (Using MoveJoint just for the 'data' field logic or custom srv)
-        # We will assume a service call handles this or parameter.
-        # For this example, I'll add a helper service to switch levels.
-        self.create_service(MoveJoint, '/planning/load_scenario', self._srv_load_scenario)
+        self.create_service(LoadScenario, '/planning/load_scenario', self._srv_load_scenario)
 
-        # 3. QUERY: Check Collision (Hypothetical)
-        self.create_service(MoveJoint, '/planning/check_collision', self._srv_check_collision)
+        self.create_service(CheckCollision, '/planning/check_collision', self._srv_check_collision)
 
-        # 4. QUERY: Get Closest Points (For APF)
-        # Returns [link_idx, distance, dir_x, dir_y, dir_z, ...] flat list
-        self.create_service(GetFloat32List, '/planning/get_apf_distances', self._srv_get_apf_data)
+        self.create_service(GetApfDistances, '/planning/get_apf_distances', self._srv_get_apf_data)
 
-        # Load default
         self.load_scenario(0)
         self.get_logger().info("Planning Engine Ready (Headless). Syncing with /xarm/joint_states")
 
@@ -84,31 +61,37 @@ class XArmPlanningScene(Node):
         data = self.scenarios[scenario_id]
 
         with self.sim_lock:
-            # Clear old
             for uid in self.obstacle_ids: p.removeBody(uid)
             self.obstacle_ids = []
 
-            # Spawn new
+            if hasattr(self, 'target_id') and self.target_id is not None:
+                p.removeBody(self.target_id)
+                self.target_id = None
+
             for obs in data['obstacles']:
                 pos = obs['pos']
                 if obs['type'] == 'box':
                     h = [d / 2 for d in obs['dim']]
                     col = p.createCollisionShape(p.GEOM_BOX, halfExtents=h)
+                    vis = p.createVisualShape(p.GEOM_BOX, halfExtents=h, rgbaColor=[0.5, 0.5, 0.5, 1])
                 else:
                     col = p.createCollisionShape(p.GEOM_SPHERE, radius=obs['radius'])
+                    vis = p.createVisualShape(p.GEOM_SPHERE, radius=obs['radius'], rgbaColor=[0.5, 0.5, 0.5, 1])
 
-                # Create Body (Static)
-                uid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col, basePosition=pos)
+                uid = p.createMultiBody(baseMass=0, baseCollisionShapeIndex=col, baseVisualShapeIndex=vis,
+                                        basePosition=pos)
                 self.obstacle_ids.append(uid)
 
-            # Note: We do NOT reset the robot here. The robot must stay synced to the real topic.
-            self.get_logger().info(f"Loaded Scenario {scenario_id}: {len(self.obstacle_ids)} obstacles")
+            if 'target_pose' in data:
+                t_pos = data['target_pose'][:3]
+
+                t_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.03, rgbaColor=[0, 1, 0, 0.8])
+
+                self.target_id = p.createMultiBody(baseMass=0, baseVisualShapeIndex=t_vis, basePosition=t_pos)
+
+            self.get_logger().info(f"Loaded Scenario {scenario_id}: {len(self.obstacle_ids)} obstacles + Target")
 
     def _sync_callback(self, msg):
-        """
-        Real-time Twin Sync.
-        When Real Robot moves, this Ghost Robot snaps to match it instantly.
-        """
         if len(msg.position) >= 7:
             with self.sim_lock:
                 self.current_joints = msg.position[:7]
@@ -119,99 +102,94 @@ class XArmPlanningScene(Node):
 
     def _srv_load_scenario(self, req, res):
         """API to change level from the Planner"""
-        # We abuse the 'angles[0]' field to pass the ID, assuming int
-        s_id = int(req.angles[0])
+        # Clean and type-safe!
+        s_id = req.scenario_index
+
+        if s_id < 0 or s_id >= len(self.scenarios):
+            res.success = False
+            res.message = f"Invalid Scenario ID: {s_id}"
+            return res
+
         self.load_scenario(s_id)
-        res.ret = 0
+        res.success = True
         res.message = f"Loaded Scenario {s_id}"
         return res
 
     def _srv_check_collision(self, req, res):
         """
         Hypothetical Check: "If I move to these angles, is it safe?"
-        Teleports ghost -> Checks -> Teleports back to synced state.
         """
-        target = req.angles[:7]
+        target = req.joint_positions
+
+        if len(target) < 7:
+            res.collision_detected = False
+            res.message = "Error: Need at least 7 joint angles"
+            return res
+
         is_hit = False
 
         with self.sim_lock:
-            # 1. Save Sync State (already in self.current_joints)
+            for i in range(7):
+                p.resetJointState(self.robot_id, self.arm_indices[i], target[i])
 
-            # 2. Teleport to Hypothesis
-            for i, val in enumerate(target):
-                p.resetJointState(self.robot_id, self.arm_indices[i], val)
-
-            # 3. Check
             p.performCollisionDetection()
             contacts = p.getContactPoints(self.robot_id)
             for c in contacts:
-                # Ignore base-floor contact
                 if c[2] == self.plane_id and c[3] <= 1: continue
                 is_hit = True
                 break
 
-            # 4. Restore Sync State (Snap back to real robot)
             for i, val in enumerate(self.current_joints):
                 p.resetJointState(self.robot_id, self.arm_indices[i], val)
 
-        res.ret = 1 if is_hit else 0
+        res.collision_detected = is_hit
         res.message = "Collision" if is_hit else "Safe"
         return res
 
     def _srv_get_apf_data(self, req, res):
-        """
-        DEBUG VERSION: Prints details to terminal
-        """
-        # 1. Verify what we are checking
-        critical_links = [2, 4, 6]
-        data = []
+        critical_links = [2, 4, 6, 9, 11, 14]
 
-        self.get_logger().info(f"--- Checking APF (Robot ID: {self.robot_id}) ---")
+        link_names = {
+            2: "Shoulder", 4: "Elbow", 6: "Wrist",
+            9: "Hand Base", 11: "Left Finger", 14: "Right Finger"
+        }
+
+        targets = [self.plane_id] + self.obstacle_ids
 
         with self.sim_lock:
-            # Check how many bodies exist in the world
-            num_bodies = p.getNumBodies()
-            self.get_logger().info(f"Total Physics Bodies: {num_bodies}")
-
             for link_idx in critical_links:
-                # distance=10.0 is HUGE to ensure we see SOMETHING
-                results = p.getClosestPoints(bodyA=self.robot_id, bodyB=-1, distance=10.0, linkIndexA=link_idx)
-
-                # Debug print
-                if not results:
-                    self.get_logger().warn(f"Link {link_idx}: No contacts found!")
-
                 min_dist = 100.0
                 best_vec = [0.0, 0.0, 0.0]
                 found = False
 
-                for c in results:
-                    obs_id = c[2]
-                    dist = c[8]
+                for target_id in targets:
+                    if target_id == self.robot_id: continue
+                    results = p.getClosestPoints(bodyA=self.robot_id, bodyB=target_id, distance=10.0,
+                                                 linkIndexA=link_idx)
+                    if not results: continue
 
-                    # Ignore Robot Self-Collision
-                    if obs_id == self.robot_id:
-                        continue
-
-                        # OPTIONAL: Ignore Floor (Plane) if you only want Object Distances
-                    # if obs_id == self.plane_id: continue
-
-                    if dist < min_dist:
-                        min_dist = dist
-                        found = True
-                        p_robot = np.array(c[5])
-                        p_obs = np.array(c[6])
-                        vec = p_obs - p_robot
-                        best_vec = vec.tolist()
+                    for c in results:
+                        dist = c[8]
+                        if dist < min_dist:
+                            min_dist = dist
+                            found = True
+                            p_robot = np.array(c[5])
+                            p_obs = np.array(c[6])
+                            best_vec = (p_obs - p_robot).tolist()
 
                 if found:
-                    self.get_logger().info(f"Link {link_idx} -> Obs {obs_id}: Dist={min_dist:.3f}m")
-                    data.extend([float(link_idx), float(min_dist), best_vec[0], best_vec[1], best_vec[2]])
-                else:
-                    self.get_logger().info(f"Link {link_idx}: Only self-collisions found.")
+                    msg = ApfLinkData()
+                    msg.link_index = int(link_idx)
+                    msg.link_name = link_names.get(link_idx, f"Link_{link_idx}")
+                    msg.min_distance = float(min_dist)
+                    # Assign Vector3
+                    msg.direction_vector.x = float(best_vec[0])
+                    msg.direction_vector.y = float(best_vec[1])
+                    msg.direction_vector.z = float(best_vec[2])
 
-        res.ret = 0
-        res.datas = data
+                    # Add to response list
+                    res.data.append(msg)
+
         return res
 
 

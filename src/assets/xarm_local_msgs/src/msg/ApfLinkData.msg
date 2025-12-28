@@ -1,0 +1,4 @@
+int16 link_index
+string link_name
+float32 min_distance
+geometry_msgs/Vector3 direction_vector

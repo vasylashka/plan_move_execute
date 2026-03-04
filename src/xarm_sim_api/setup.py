@@ -24,6 +24,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            # Link the executable name 'xarm7_physics_sim' to the main function in the python file
+            'xarm7_physics_sim = xarm_sim_api.xarm_pybullet_simulator:main',
         ],
     },
 )

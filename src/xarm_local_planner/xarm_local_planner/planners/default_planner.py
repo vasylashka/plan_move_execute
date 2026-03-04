@@ -9,8 +9,8 @@ class JointSpaceAPFPlanner(BaseLocalPlanner):
 
         # Declare specific APF params
         self.declare_parameter('attraction_gain', 1.5)
-        self.declare_parameter('repulsion_gain', 0.05)
-        self.declare_parameter('influence_distance', 0.05)
+        self.declare_parameter('repulsion_gain', 0.01)
+        self.declare_parameter('influence_distance', 0.03)
 
         # Initialize the strategy
         self.strategy = DefaultAPFStrategy(

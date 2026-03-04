@@ -24,6 +24,11 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            # The Planning Scene (Collision Environment)
+            'xarm_planning_scene = xarm_local_planner.sim:main',
+
+            # The Default Planner (Joint Space APF)
+            'joint_space_apf_planner = xarm_local_planner.planners.default_planner:main',
         ],
     },
 )

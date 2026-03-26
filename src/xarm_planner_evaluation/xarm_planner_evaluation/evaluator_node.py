@@ -2,8 +2,7 @@ import rclpy
 from rclpy.node import Node
 import time
 import json
-import os
-import random  # Added for random selection
+import random
 import numpy as np
 
 from sensor_msgs.msg import JointState
@@ -16,8 +15,6 @@ from xarm_planner_evaluation.metrics import TrajectoryMetrics
 class EvaluatorNode(Node):
     def __init__(self):
         super().__init__('evaluator_node')
-        # Print immediately to confirm startup
-        print(">>> EVALUATOR NODE STARTED <<<")
         self.get_logger().info("Evaluator Node Initialized. Waiting for services...")
 
         # Declare parameters
@@ -29,26 +26,28 @@ class EvaluatorNode(Node):
         self.is_random = self.get_parameter('random_selection').value
         self.total_scenarios = self.get_parameter('total_scenarios').value
 
-        # Generate the list of scenarios to run
+        # Generate scenario list
         if self.is_random:
-            # Ensure we don't try to sample more scenarios than exist
             sample_size = min(self.limit, self.total_scenarios)
             self.scenarios_to_execute = random.sample(range(self.total_scenarios), sample_size)
             self.limit = sample_size
-            self.get_logger().info(f"Random mode ON. Selected scenarios: {self.scenarios_to_execute}")
+            self.get_logger().info(f"Random mode ON. Selected: {self.scenarios_to_execute}")
         else:
             self.scenarios_to_execute = list(range(self.limit))
-            self.get_logger().info(f"Sequential mode ON. Running first {self.limit} scenarios.")
+            self.get_logger().info(f"Sequential mode ON. Running first {self.limit}.")
 
         self.current_run_index = -1
         self.current_scenario_id = -1
-
-        self.current_metrics = None
         self.results = []
+
+        # State Management Flags
         self.is_recording = False
         self.scenario_active = False
+        self.is_resetting = False
+
         self.latest_latency = 0.0
         self.latest_clearance = 10.0
+        self.current_metrics = None
 
         # ROS Interfaces
         self.sub_joints = self.create_subscription(
@@ -61,14 +60,17 @@ class EvaluatorNode(Node):
         self.cli_load = self.create_client(LoadScenario, '/planning/load_scenario')
         self.cli_clean = self.create_client(Call, '/xarm/clean_error')
 
-        # Wait for service
+        # Wait for required services
         while not self.cli_load.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Waiting for /planning/load_scenario...")
+        while not self.cli_clean.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Waiting for /xarm/clean_error...")
 
         self.get_logger().info("Services Connected. Starting Evaluation Loop...")
         self.timer = self.create_timer(2.0, self._run_next_scenario)
 
     def _cb_joints(self, msg):
+        """Records data only when a measurement scenario is active."""
         if self.is_recording and self.current_metrics is not None:
             pos = np.array(msg.position[:7])
             now = time.time()
@@ -82,51 +84,78 @@ class EvaluatorNode(Node):
             self.latest_clearance = msg.data[1]
 
     def _cb_status(self, msg):
-        if self.scenario_active and msg.data == True:
-            self.get_logger().info(f"Scenario {self.current_scenario_id} COMPLETED.")
-            self._finish_scenario(success=True)
+        """Handles transitions between Resetting (Home) and Active Evaluation."""
+        if msg.data is True:
+            if self.is_resetting:
+                self.get_logger().info("Home reached. Starting actual scenario...")
+                self.is_resetting = False
+                self._start_actual_evaluation()
+            elif self.scenario_active:
+                self.get_logger().info(f"Scenario {self.current_scenario_id} COMPLETED.")
+                self._finish_scenario(success=True)
 
     def _run_next_scenario(self):
+        """Step 1: Initiate reset by clearing obstacles and setting target to Home."""
         self.timer.cancel()
         self.current_run_index += 1
 
-        # Check if we have completed all requested runs
         if self.current_run_index >= self.limit:
             self._save_report()
             rclpy.shutdown()
             return
 
-        # Get the actual scenario ID from our generated list
         self.current_scenario_id = self.scenarios_to_execute[self.current_run_index]
+        self.get_logger().info(f"--- RUN {self.current_run_index + 1}/{self.limit} (S{self.current_scenario_id}) ---")
 
-        self.get_logger().info(f"--- STARTING RUN {self.current_run_index + 1}/{self.limit} (SCENARIO ID: {self.current_scenario_id}) ---")
+        # Call Scenario -1 to clear obstacles and set Home target in planner
+        req = LoadScenario.Request()
+        req.scenario_index = -1
+        future = self.cli_load.call_async(req)
+        future.add_done_callback(self._on_reset_scene_done)
 
-        # Call clean error just in case
+    def _on_reset_scene_done(self, future):
+        """Step 2: Unlock the robot now that obstacles are gone."""
+        self.get_logger().info("Scene cleared. Unlocking robot...")
         clean_req = Call.Request()
-        self.cli_clean.call_async(clean_req)
-        time.sleep(0.5)
+        future_clean = self.cli_clean.call_async(clean_req)
+        future_clean.add_done_callback(self._on_robot_unlocked)
 
-        # Setup Metrics
+    def _on_robot_unlocked(self, future):
+        """Step 3: Flag that we are waiting for the arm to reach Home."""
+        self.get_logger().info("Robot unlocked. Resetting to Home...")
+        self.is_resetting = True
+        # Watchdog for reset phase
+        self.reset_start_time = time.time()
+        self.reset_timer = self.create_timer(1.0, self._check_reset_timeout)
+
+    def _check_reset_timeout(self):
+        if self.is_resetting and (time.time() - self.reset_start_time > 15.0):
+            self.get_logger().warn("Reset to Home timed out! Attempting to proceed...")
+            self.is_resetting = False
+            self.reset_timer.cancel()
+            self._start_actual_evaluation()
+        elif not self.is_resetting:
+            self.reset_timer.cancel()
+
+    def _start_actual_evaluation(self):
+        """Step 4: Load the real scenario and begin performance recording."""
         self.current_metrics = TrajectoryMetrics()
         self.latest_latency = 0.0
         self.latest_clearance = 10.0
 
-        # Load Scenario
+        # Load Actual Scenario
         req = LoadScenario.Request()
         req.scenario_index = self.current_scenario_id
-        future = self.cli_load.call_async(req)
+        self.cli_load.call_async(req)
 
-        # Enable Recording
         self.is_recording = True
         self.scenario_active = True
         self.start_time = time.time()
-
-        # Timeout Watchdog
-        self.timeout_timer = self.create_timer(10.0, self._check_timeout)
+        self.timeout_timer = self.create_timer(15.0, self._check_timeout)
 
     def _check_timeout(self):
         if self.scenario_active:
-            if time.time() - self.start_time > 15.0:
+            if time.time() - self.start_time > 20.0:
                 self.get_logger().warn(f"Scenario {self.current_scenario_id} TIMEOUT.")
                 self._finish_scenario(success=False)
 
@@ -143,12 +172,13 @@ class EvaluatorNode(Node):
                 data['scenario_id'] = self.current_scenario_id
                 data['success'] = success
                 self.results.append(data)
-                print(f"Result S{self.current_scenario_id}: {data}")
+                self.get_logger().info(f"Result S{self.current_scenario_id}: Success={success}")
 
+        # Wait 2 seconds before next reset sequence
         self.timer = self.create_timer(2.0, self._run_next_scenario)
 
     def _save_report(self):
-        print("\n========= EVALUATION REPORT =========")
+        self.get_logger().info("Evaluation Finished. Saving report...")
         with open('evaluation_results.json', 'w') as f:
             json.dump(self.results, f, indent=4)
         print("Report Saved.")
@@ -163,7 +193,6 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        # Make sure rclpy is still okay to shutdown
         if rclpy.ok():
             rclpy.shutdown()
 

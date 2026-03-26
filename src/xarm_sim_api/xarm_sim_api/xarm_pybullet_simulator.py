@@ -56,7 +56,7 @@ class XArm7PhysicsSim(Node):
 
         self.dof = 7
         self.curr_joints = list(self.home_angles)
-        self.curr_pose = [0.0] * 6
+        self.curr_pose = [0.0] * 7
 
         # Robot Status: 1=Idle, 2=Moving, 4=Error
         self.robot_state = 1

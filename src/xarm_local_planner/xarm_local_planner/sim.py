@@ -37,6 +37,7 @@ class XArmPlanningScene(Node):
         self.obstacle_ids = []
         self.target_id = None
         self.current_joints = [0.0] * 7
+        self.home_position = [0.0, -0.5, 0.0, 0.0, 0.0, 0.0, 0.0]
 
         # ===== OPTIMIZED JOINT INDICES =====
         self.arm_indices = []
@@ -66,10 +67,18 @@ class XArmPlanningScene(Node):
         self.create_service(CheckCollision, '/planning/check_collision', self._srv_check_collision)
         self.create_service(GetApfDistances, '/planning/get_apf_distances', self._srv_get_apf_data)
 
-        self.load_scenario(0)
+        self.load_scenario(-1)
         self.get_logger().info("Planning Engine Ready.")
 
     def load_scenario(self, scenario_id):
+        if scenario_id == -1:
+            with self.sim_lock:
+                self.current_target_joints = self.home_position
+                for uid in self.obstacle_ids: p.removeBody(uid)
+                self.obstacle_ids = []
+            self.get_logger().info("Planner Target Reset to Current Position.")
+            return
+
         if scenario_id >= len(self.scenarios): return
         data = self.scenarios[scenario_id]
 
@@ -123,7 +132,7 @@ class XArmPlanningScene(Node):
         self.target_pub.publish(out_msg)
 
     def _srv_load_scenario(self, req, res):
-        if 0 <= req.scenario_index < len(self.scenarios):
+        if req.scenario_index == -1 or 0 <= req.scenario_index < len(self.scenarios):
             self.load_scenario(req.scenario_index)
             res.success = True
             res.message = f"Loaded {req.scenario_index}"

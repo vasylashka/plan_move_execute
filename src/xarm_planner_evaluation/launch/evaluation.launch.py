@@ -14,6 +14,24 @@ def generate_launch_description():
         description='Name of the planner node executable to launch'
     )
 
+    scenarios_to_run_arg = DeclareLaunchArgument(
+        'scenarios_to_run',
+        default_value='5',
+        description='Number of scenarios to execute'
+    )
+
+    random_selection_arg = DeclareLaunchArgument(
+        'random_selection',
+        default_value='False',
+        description='Whether to pick scenarios randomly instead of sequentially'
+    )
+
+    total_scenarios_arg = DeclareLaunchArgument(
+        'total_scenarios',
+        default_value='100',
+        description='Total number of scenarios generated in the JSON'
+    )
+
     # === Node Configurations ===
 
     # 1. Physics Simulator (The "Real" Robot)
@@ -46,10 +64,14 @@ def generate_launch_description():
     # 4. The Evaluator (Test Orchestrator)
     evaluator_node = Node(
         package='xarm_planner_evaluation',
-        executable='evaluator',
+        executable='evaluator_node',
         name='evaluator_node',
         output='screen',
-        parameters=[{'scenarios_to_run': 5}]  # Run first 5 for quick test
+        parameters=[{
+            'scenarios_to_run': LaunchConfiguration('scenarios_to_run'),
+            'random_selection': LaunchConfiguration('random_selection'),
+            'total_scenarios': LaunchConfiguration('total_scenarios')
+        }]
     )
 
     return LaunchDescription([

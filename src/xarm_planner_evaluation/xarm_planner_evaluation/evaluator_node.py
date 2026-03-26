@@ -3,7 +3,8 @@ from rclpy.node import Node
 import time
 import json
 import os
-import numpy as np  # Ensure numpy is imported
+import random  # Added for random selection
+import numpy as np
 
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray, Bool
@@ -19,8 +20,28 @@ class EvaluatorNode(Node):
         print(">>> EVALUATOR NODE STARTED <<<")
         self.get_logger().info("Evaluator Node Initialized. Waiting for services...")
 
+        # Declare parameters
         self.declare_parameter('scenarios_to_run', 5)
+        self.declare_parameter('random_selection', False)
+        self.declare_parameter('total_scenarios', 100)
+
         self.limit = self.get_parameter('scenarios_to_run').value
+        self.is_random = self.get_parameter('random_selection').value
+        self.total_scenarios = self.get_parameter('total_scenarios').value
+
+        # Generate the list of scenarios to run
+        if self.is_random:
+            # Ensure we don't try to sample more scenarios than exist
+            sample_size = min(self.limit, self.total_scenarios)
+            self.scenarios_to_execute = random.sample(range(self.total_scenarios), sample_size)
+            self.limit = sample_size
+            self.get_logger().info(f"Random mode ON. Selected scenarios: {self.scenarios_to_execute}")
+        else:
+            self.scenarios_to_execute = list(range(self.limit))
+            self.get_logger().info(f"Sequential mode ON. Running first {self.limit} scenarios.")
+
+        self.current_run_index = -1
+        self.current_scenario_id = -1
 
         self.current_metrics = None
         self.results = []
@@ -40,12 +61,11 @@ class EvaluatorNode(Node):
         self.cli_load = self.create_client(LoadScenario, '/planning/load_scenario')
         self.cli_clean = self.create_client(Call, '/xarm/clean_error')
 
-        # Wait for service (non-blocking check in loop would be better, but this is simple)
+        # Wait for service
         while not self.cli_load.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Waiting for /planning/load_scenario...")
 
         self.get_logger().info("Services Connected. Starting Evaluation Loop...")
-        self.current_scenario_id = -1
         self.timer = self.create_timer(2.0, self._run_next_scenario)
 
     def _cb_joints(self, msg):
@@ -62,22 +82,24 @@ class EvaluatorNode(Node):
             self.latest_clearance = msg.data[1]
 
     def _cb_status(self, msg):
-        # Log every status message to debug connection
-        # self.get_logger().info(f"Status Received: {msg.data}, Active: {self.scenario_active}")
         if self.scenario_active and msg.data == True:
             self.get_logger().info(f"Scenario {self.current_scenario_id} COMPLETED.")
             self._finish_scenario(success=True)
 
     def _run_next_scenario(self):
         self.timer.cancel()
-        self.current_scenario_id += 1
+        self.current_run_index += 1
 
-        if self.current_scenario_id >= self.limit:
+        # Check if we have completed all requested runs
+        if self.current_run_index >= self.limit:
             self._save_report()
             rclpy.shutdown()
             return
 
-        self.get_logger().info(f"--- STARTING SCENARIO {self.current_scenario_id} ---")
+        # Get the actual scenario ID from our generated list
+        self.current_scenario_id = self.scenarios_to_execute[self.current_run_index]
+
+        self.get_logger().info(f"--- STARTING RUN {self.current_run_index + 1}/{self.limit} (SCENARIO ID: {self.current_scenario_id}) ---")
 
         # Call clean error just in case
         clean_req = Call.Request()
@@ -127,7 +149,6 @@ class EvaluatorNode(Node):
 
     def _save_report(self):
         print("\n========= EVALUATION REPORT =========")
-        # ... (same as before) ...
         with open('evaluation_results.json', 'w') as f:
             json.dump(self.results, f, indent=4)
         print("Report Saved.")
@@ -142,7 +163,9 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # Make sure rclpy is still okay to shutdown
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

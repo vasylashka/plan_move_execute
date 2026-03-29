@@ -4,20 +4,26 @@ import numpy as np
 class TrajectoryMetrics:
     def __init__(self):
         self.timestamps = []
-        self.positions = []  # List of np.array (7,)
+        self.positions = []  # List of np.array (7,) joint positions
+        self.ee_poses = []   # List of np.array (6,) Cartesian poses [x, y, z, roll, pitch, yaw]
         self.latencies = []  # List of floats (computation time per step)
         self.clearances = []  # List of floats (min distance to obstacle)
         self.velocities = []  # Derived
         self.accelerations = []  # Derived
         self.jerks = []  # Derived
 
-    def add_data_point(self, timestamp, position, latency, clearance):
+    def add_data_point(self, timestamp, position, ee_pose, latency, clearance):
         self.timestamps.append(timestamp)
         self.positions.append(position)
+        self.ee_poses.append(ee_pose)
         self.latencies.append(latency)
         self.clearances.append(clearance)
 
-    def compute_all(self):
+    def compute_all(self, target_pose=None):
+        """
+        Computes performance metrics.
+        :param target_pose: Optional np.array [x, y, z, r, p, y] for accuracy calculation.
+        """
         if len(self.positions) < 4:
             return None
 
@@ -64,6 +70,14 @@ class TrajectoryMetrics:
                          range(1, len(self.velocities))]
             max_vel_jump = np.max(vel_diffs)
 
+        # 4. Accuracy Metric: Final Position Error
+        final_dist_error = 0.0
+        if target_pose is not None and len(self.ee_poses) > 0:
+            # Calculate Euclidean distance using only [x, y, z] components
+            final_ee_pos = np.array(self.ee_poses[-1][:3])
+            target_pos = np.array(target_pose[:3])
+            final_dist_error = float(np.linalg.norm(final_ee_pos - target_pos))
+
         total_time = self.timestamps[-1] - self.timestamps[0]
 
         return {
@@ -72,5 +86,6 @@ class TrajectoryMetrics:
             "avg_latency": avg_latency,
             "min_clearance": min_clearance,
             "smoothness_jerk": mean_squared_jerk,
-            "continuity_max_vel_jump": max_vel_jump
+            "continuity_max_vel_jump": max_vel_jump,
+            "final_distance_error": final_dist_error
         }

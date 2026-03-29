@@ -7,6 +7,7 @@ import numpy as np
 
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray, Bool
+from xarm_msgs.msg import RobotMsg
 from xarm_local_msgs.srv import LoadScenario
 from xarm_msgs.srv import Call
 from xarm_planner_evaluation.metrics import TrajectoryMetrics
@@ -21,10 +22,15 @@ class EvaluatorNode(Node):
         self.declare_parameter('scenarios_to_run', 5)
         self.declare_parameter('random_selection', False)
         self.declare_parameter('total_scenarios', 100)
+        self.declare_parameter('scenario_config_path',
+                               '/home/ros2_ws/plan_move_execute/src/xarm_local_planner/xarm_local_planner/scenarios.json')
 
         self.limit = self.get_parameter('scenarios_to_run').value
         self.is_random = self.get_parameter('random_selection').value
         self.total_scenarios = self.get_parameter('total_scenarios').value
+
+        # Load Scenario JSON for metrics
+        self.scenarios_data = self._load_scenarios()
 
         # Generate scenario list
         if self.is_random:
@@ -47,11 +53,14 @@ class EvaluatorNode(Node):
 
         self.latest_latency = 0.0
         self.latest_clearance = 10.0
+        self.latest_ee_pose = np.zeros(6)
         self.current_metrics = None
 
         # ROS Interfaces
         self.sub_joints = self.create_subscription(
             JointState, '/xarm/joint_states', self._cb_joints, 10)
+        self.sub_robot = self.create_subscription(
+            RobotMsg, '/xarm/robot_states', self._cb_robot_status, 10)
         self.sub_telemetry = self.create_subscription(
             Float32MultiArray, '/planning/telemetry', self._cb_telemetry, 10)
         self.sub_status = self.create_subscription(
@@ -69,13 +78,27 @@ class EvaluatorNode(Node):
         self.get_logger().info("Services Connected. Starting Evaluation Loop...")
         self.timer = self.create_timer(2.0, self._run_next_scenario)
 
+    def _load_scenarios(self):
+        path = self.get_parameter('scenario_config_path').value
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            self.get_logger().error(f"Could not load scenarios from {path}: {e}")
+            return []
+
+    def _cb_robot_status(self, msg):
+        """Captures Cartesian pose from the simulator robot status."""
+        if len(msg.pose) >= 6:
+            self.latest_ee_pose = np.array(msg.pose[:6])
+
     def _cb_joints(self, msg):
-        """Records data only when a measurement scenario is active."""
+        """Records both Joint and Cartesian data when a measurement is active."""
         if self.is_recording and self.current_metrics is not None:
             pos = np.array(msg.position[:7])
             now = time.time()
             self.current_metrics.add_data_point(
-                now, pos, self.latest_latency, self.latest_clearance
+                now, pos, self.latest_ee_pose, self.latest_latency, self.latest_clearance
             )
 
     def _cb_telemetry(self, msg):
@@ -167,12 +190,18 @@ class EvaluatorNode(Node):
             self.timeout_timer.destroy()
 
         if self.current_metrics:
-            data = self.current_metrics.compute_all()
+            # Find the target_pose from loaded scenarios
+            target = None
+            if self.current_scenario_id < len(self.scenarios_data):
+                target = np.array(self.scenarios_data[self.current_scenario_id].get('target_pose'))
+
+            data = self.current_metrics.compute_all(target_pose=target)
             if data:
                 data['scenario_id'] = self.current_scenario_id
                 data['success'] = success
                 self.results.append(data)
-                self.get_logger().info(f"Result S{self.current_scenario_id}: Success={success}")
+                self.get_logger().info(
+                    f"Result S{self.current_scenario_id}: Success={success}, Error={data['final_distance_error']:.4f}m")
 
         # Wait 2 seconds before next reset sequence
         self.timer = self.create_timer(2.0, self._run_next_scenario)

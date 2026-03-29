@@ -7,7 +7,7 @@ from threading import Thread
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray, Bool
 from xarm_local_msgs.srv import GetApfDistances
-from xarm_msgs.srv import MoveJoint
+from xarm_msgs.srv import MoveJoint, SetInt16
 
 
 class BaseLocalPlanner(Node):
@@ -33,6 +33,7 @@ class BaseLocalPlanner(Node):
 
         self.cli_env = self.create_client(GetApfDistances, '/planning/get_apf_distances')
         self.cli_move = self.create_client(MoveJoint, '/xarm/set_servo_angle')
+        self.cli_state = self.create_client(SetInt16, '/xarm/set_state')
 
         # To be set by subclasses
         self.strategy = None
@@ -53,6 +54,24 @@ class BaseLocalPlanner(Node):
                 self.q_goal = new_goal
                 self.goal_reached_flag = False
                 self.get_logger().info(f"New Goal Received: {np.round(self.q_goal, 3)}")
+
+                self.flush_motion_queue()
+
+    def flush_motion_queue(self):
+        """Clears the xArm controller's trajectory cache and local ROS 2 buffers."""
+        if self.cli_state.wait_for_service(timeout_sec=0.1):
+            req_stop = SetInt16.Request()
+            req_stop.data = 4
+            self.cli_state.call_async(req_stop)
+
+            req_ready = SetInt16.Request()
+            req_ready.data = 0
+            self.cli_state.call_async(req_ready)
+
+        self.destroy_client(self.cli_move)
+        self.cli_move = self.create_client(MoveJoint, '/xarm/set_servo_angle')
+
+        self.get_logger().info("Motion queues flushed. Starting new path immediately.")
 
     def get_environment_data(self):
         """Helper to call the distance service"""

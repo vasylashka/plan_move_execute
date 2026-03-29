@@ -2,12 +2,12 @@
 """
 xArm7 Physics Simulator (Final Production Version)
 - Features: Real-time Physics, Collision Stop, Error Locking, Custom Home.
-- Fixes: Inverted Gripper, Explicit Error Messages in Service Responses.
+- Fixes: Queue Flushing, Interruption handling, Deadlock resolution.
 """
 
 import rclpy
 from rclpy.node import Node
-from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup
 import pybullet as p
 import pybullet_data
 import time
@@ -58,7 +58,7 @@ class XArm7PhysicsSim(Node):
         self.curr_joints = list(self.home_angles)
         self.curr_pose = [0.0] * 7
 
-        # Robot Status: 1=Idle, 2=Moving, 4=Error
+        # Robot Status: 1=Idle, 2=Moving, 4=Error/Stopped
         self.robot_state = 1
         self.error_code = 0
 
@@ -68,7 +68,7 @@ class XArm7PhysicsSim(Node):
         self.get_logger().info(f"xArm Simulator Online. Home Pose: {self.home_angles}")
 
     def _init_physics(self):
-        self.physics_client = p.connect(p.GUI)
+        self.physics_client = p.connect(p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.81)
         self.plane_id = p.loadURDF("plane.urdf")
@@ -187,7 +187,12 @@ class XArm7PhysicsSim(Node):
                         )
                     return 1  # Return Collision Code
 
-                # 2. Arrived?
+                # 2. Check for Queue Flush / Stop Command
+                if self.robot_state == 4 and self.error_code == 0:
+                    self.is_moving = False
+                    return 2  # Return Aborted Code
+
+                # 3. Arrived?
                 error = sum([abs(self.curr_joints[i] - target_joints[i]) for i in range(7)])
                 if error < 0.05:
                     self.is_moving = False
@@ -203,6 +208,45 @@ class XArm7PhysicsSim(Node):
             return -1
 
     # ================= SERVICES =================
+
+    def _srv_set_state(self, req, res):
+        """
+        Handles state changes.
+        State 0: Ready
+        State 3: Pause
+        State 4: Stop (Flushes queue and halts motion)
+        """
+        requested_state = req.data
+
+        if requested_state == 4:
+            self.is_moving = False
+            self.collision_event.clear()
+
+            # If not in a crash error, set state to 4 (Stopped)
+            if self.error_code == 0:
+                self.robot_state = 4
+
+                # FREEZE ROBOT: Set target to the exact current position
+            with self.sim_lock:
+                p.setJointMotorControlArray(
+                    self.robot_id, self.arm_indices, p.POSITION_CONTROL,
+                    targetPositions=self.curr_joints,
+                    forces=[200.0] * 7,
+                    positionGains=[0.1] * 7
+                )
+            res.message = "Robot Stopped and Queue Flushed"
+
+        elif requested_state == 0:
+            # Return to Idle (1) only if there are no active crash errors
+            if self.error_code == 0:
+                self.robot_state = 1
+            res.message = "Robot Ready"
+
+        else:
+            res.message = "State Acknowledged"
+
+        res.ret = 0
+        return res
 
     def _srv_move_joint(self, req, res):
         # 1. Safety Check
@@ -220,7 +264,12 @@ class XArm7PhysicsSim(Node):
                 targetPositions=target, forces=[200.0] * 7, positionGains=[0.05] * 7
             )
 
-        status = self._wait_for_arrival(target)
+        if getattr(req, 'wait', True):
+            status = self._wait_for_arrival(target)
+        else:
+            self.is_moving = True
+            self.robot_state = 2
+            status = 0
 
         if status == 0:
             res.ret = 0
@@ -228,6 +277,9 @@ class XArm7PhysicsSim(Node):
         elif status == 1:
             res.ret = 1
             res.message = "CRASH DETECTED: Movement Aborted"
+        elif status == 2:
+            res.ret = 0
+            res.message = "Motion Interrupted / Queue Flushed"
         else:
             res.ret = -1
             res.message = "Timeout: Target not reached"
@@ -265,6 +317,9 @@ class XArm7PhysicsSim(Node):
         elif status == 1:
             res.ret = 1
             res.message = "CRASH DETECTED: Movement Aborted"
+        elif status == 2:
+            res.ret = 0
+            res.message = "Motion Interrupted"
         else:
             res.ret = -1
             res.message = "Timeout or Unreachable"
@@ -317,12 +372,25 @@ class XArm7PhysicsSim(Node):
         self.error_code = 0
         self.robot_state = 1
         self.collision_event.clear()
+
+        # Teleport the robot to the Home position to break collision deadlocks
+        with self.sim_lock:
+            for i, angle in enumerate(self.home_angles):
+                if i < len(self.arm_indices):
+                    p.resetJointState(self.robot_id, self.arm_indices[i], angle)
+
+            p.setJointMotorControlArray(
+                self.robot_id, self.arm_indices, p.POSITION_CONTROL,
+                targetPositions=self.home_angles, forces=[200.0] * 7, positionGains=[0.05] * 7
+            )
+            self.curr_joints = list(self.home_angles)
+            self.is_moving = False
+
         res.ret = 0
-        res.message = "Errors Cleared. Robot Unlocked."
-        self.get_logger().info("System Reset: Errors Cleared.")
+        res.message = "Errors Cleared and Robot Reset to Home."
+        self.get_logger().info("System Reset: Errors Cleared and Deadlock Broken.")
         return res
 
-    # Dummy services
     def _srv_ok(self, req, res):
         res.ret = 0
         res.message = "OK"
@@ -330,18 +398,21 @@ class XArm7PhysicsSim(Node):
 
     # ================= INIT ROS =================
     def _init_ros(self):
-        cb = MutuallyExclusiveCallbackGroup()
+        cb = ReentrantCallbackGroup()
         self.pub_joints = self.create_publisher(JointState, f'{self.hw_ns}/joint_states', 10)
         self.pub_robot = self.create_publisher(RobotMsg, f'{self.hw_ns}/robot_states', 10)
 
+        self.create_service(SetInt16, f'{self.hw_ns}/set_state', self._srv_set_state, callback_group=cb)
         self.create_service(MoveJoint, f'{self.hw_ns}/set_servo_angle', self._srv_move_joint, callback_group=cb)
         self.create_service(MoveCartesian, f'{self.hw_ns}/set_position', self._srv_move_cartesian, callback_group=cb)
         self.create_service(MoveHome, f'{self.hw_ns}/move_gohome', self._srv_move_home, callback_group=cb)
         self.create_service(GripperMove, f'{self.hw_ns}/set_gripper_position', self._srv_gripper, callback_group=cb)
         self.create_service(Call, f'{self.hw_ns}/clean_error', self._srv_clean_error, callback_group=cb)
-        for s in ['set_mode', 'set_state', 'clean_warn']:
+
+        for s in ['set_mode', 'clean_warn']:
             t = SetInt16 if 'set' in s else Call
             self.create_service(t, f'{self.hw_ns}/{s}', self._srv_ok, callback_group=cb)
+
         self.create_timer(0.03, self._publish_status)
 
     def _publish_status(self):
@@ -373,7 +444,8 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node(); rclpy.shutdown()
+        node.destroy_node();
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

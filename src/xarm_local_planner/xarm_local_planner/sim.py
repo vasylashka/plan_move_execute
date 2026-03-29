@@ -111,10 +111,28 @@ class XArmPlanningScene(Node):
                 t_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.03, rgbaColor=[0, 1, 0, 0.8])
                 self.target_id = p.createMultiBody(baseMass=0, baseVisualShapeIndex=t_vis, basePosition=t_pos)
 
+                # 1. Dynamically get limits from the URDF to avoid clipping errors
+                lower_limits = []
+                upper_limits = []
+                joint_ranges = []
+                for idx in self.arm_indices:  # arm_indices from xarm_pybullet_simulator.py
+                    info = p.getJointInfo(self.robot_id, idx)
+                    lower_limits.append(info[8])
+                    upper_limits.append(info[9])
+                    joint_ranges.append(6.28)  # Allow full rotation within limits
+
+                # 2. Use a high-precision IK call
                 joints = p.calculateInverseKinematics(
-                    self.robot_id, self.tcp_link_idx, t_pos, t_quat,
-                    lowerLimits=[-3.14] * 7, upperLimits=[3.14] * 7,
-                    jointRanges=[6.28] * 7, restPoses=list(self.current_joints)
+                    self.robot_id,
+                    self.tcp_link_idx,
+                    t_pos,
+                    t_quat,
+                    lowerLimits=lower_limits,
+                    upperLimits=upper_limits,
+                    jointRanges=joint_ranges,
+                    restPoses=list(self.home_position),  # Use Cobra pose as a hint
+                    maxNumIterations=1000,  # Force high precision
+                    residualThreshold=1e-7  # Accuracy in meters
                 )
                 self.current_target_joints = list(joints[:7])
 

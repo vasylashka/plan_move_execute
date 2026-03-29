@@ -5,7 +5,7 @@ from xarm_local_planner.strategies.virtual_obstacle_strategy import VirtualObsta
 
 class VirtualObstacleAPFPlanner(BaseLocalPlanner):
     def __init__(self):
-        super().__init__('joint_space_apf_planner')
+        super().__init__('virtual_obstacle_apf_planner')
 
         # Standard APF params
         self.declare_parameter('attraction_gain', 1.5)

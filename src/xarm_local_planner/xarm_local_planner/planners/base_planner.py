@@ -8,6 +8,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray, Bool
 from xarm_local_msgs.srv import GetApfDistances
 from xarm_msgs.srv import MoveJoint, SetInt16
+from xarm_msgs.msg import RobotMsg  # ADDED
 
 
 class BaseLocalPlanner(Node):
@@ -20,6 +21,11 @@ class BaseLocalPlanner(Node):
 
         self.current_joints = np.zeros(7)
         self.q_goal = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+        # Cartesian State Variables # ADDED
+        self.current_ee_pos = np.zeros(3)
+        self.target_ee_pos = np.zeros(3)
+
         self.planning_active = False
         self.goal_reached_flag = False
 
@@ -27,7 +33,12 @@ class BaseLocalPlanner(Node):
         self.sub_joints = self.create_subscription(JointState, '/xarm/joint_states', self.joint_callback, 10)
         self.sub_goal = self.create_subscription(Float32MultiArray, '/planning/target_joints', self.goal_callback, 10)
 
-        # Telemetry Publishers (ADDED for Evaluation)
+        # New Cartesian Subscriptions # ADDED
+        self.sub_robot = self.create_subscription(RobotMsg, '/xarm/robot_states', self.robot_callback, 10)
+        self.sub_target_pose = self.create_subscription(Float32MultiArray, '/planning/target_pose',
+                                                        self.target_pose_callback, 10)
+
+        # Telemetry Publishers
         self.pub_telemetry = self.create_publisher(Float32MultiArray, '/planning/telemetry', 10)
         self.pub_status = self.create_publisher(Bool, '/planning/status_reached', 10)
 
@@ -35,9 +46,7 @@ class BaseLocalPlanner(Node):
         self.cli_move = self.create_client(MoveJoint, '/xarm/set_servo_angle')
         self.cli_state = self.create_client(SetInt16, '/xarm/set_state')
 
-        # To be set by subclasses
         self.strategy = None
-
         self.planning_active = True
         self.plan_thread = Thread(target=self.control_loop)
         self.plan_thread.start()
@@ -46,19 +55,26 @@ class BaseLocalPlanner(Node):
         if len(msg.position) >= 7:
             self.current_joints = np.array(msg.position[:7])
 
+    def robot_callback(self, msg):  # ADDED
+        """Updates current Cartesian position from simulator ground truth."""
+        if len(msg.pose) >= 3:
+            self.current_ee_pos = np.array(msg.pose[:3])
+
+    def target_pose_callback(self, msg):  # ADDED
+        """Updates the Cartesian target from the planning scene."""
+        if len(msg.data) >= 3:
+            self.target_ee_pos = np.array(msg.data[:3])
+
     def goal_callback(self, msg):
         if len(msg.data) >= 7:
             new_goal = np.array(msg.data[:7])
-            # Reset flag if goal changes significantly
             if np.linalg.norm(new_goal - self.q_goal) > 1e-3:
                 self.q_goal = new_goal
                 self.goal_reached_flag = False
                 self.get_logger().info(f"New Goal Received: {np.round(self.q_goal, 3)}")
-
                 self.flush_motion_queue()
 
     def flush_motion_queue(self):
-        """Clears the xArm controller's trajectory cache and local ROS 2 buffers."""
         if self.cli_state.wait_for_service(timeout_sec=0.1):
             req_stop = SetInt16.Request()
             req_stop.data = 4
@@ -70,11 +86,9 @@ class BaseLocalPlanner(Node):
 
         self.destroy_client(self.cli_move)
         self.cli_move = self.create_client(MoveJoint, '/xarm/set_servo_angle')
-
-        self.get_logger().info("Motion queues flushed. Starting new path immediately.")
+        self.get_logger().info("Motion queues flushed.")
 
     def get_environment_data(self):
-        """Helper to call the distance service"""
         req = GetApfDistances.Request()
         future = self.cli_env.call_async(req)
         start_time = time.time()
@@ -84,53 +98,48 @@ class BaseLocalPlanner(Node):
         return future.result()
 
     def control_loop(self):
-        """The main execution loop with added Telemetry"""
+        """The main execution loop with Cartesian distance stopping criteria"""
         time.sleep(2.0)
         while rclpy.ok() and self.planning_active:
             if self.strategy is None:
                 continue
 
-            # Check if reached
-            dist_to_goal = np.linalg.norm(self.current_joints - self.q_goal)
-            if dist_to_goal < 0.02:
+            # === Cartesian Distance Calculation === # CHANGED
+            cart_dist = np.linalg.norm(self.current_ee_pos - self.target_ee_pos)
+
+            # Stop if within 1cm of the Cartesian target
+            if cart_dist < 0.025:
                 if not self.goal_reached_flag:
-                    self.get_logger().info("Target Reached!")
+                    self.get_logger().info(f"Target Reached! Cartesian Distance: {cart_dist:.4f}m")
                     self.goal_reached_flag = True
-                    self.pub_status.publish(Bool(data=True))  # Notify Evaluator
+                    self.pub_status.publish(Bool(data=True))
                 time.sleep(0.1)
                 continue
             else:
-                # Ensure we publish "Not Reached" occasionally or when moving
                 if self.goal_reached_flag:
                     self.goal_reached_flag = False
                     self.pub_status.publish(Bool(data=False))
 
-            # === Start Timer for Latency Metric ===
             t0 = time.time()
-
-            # Get environmental data
             env_data = self.get_environment_data()
 
-            # Delegate calculation
             velocity_vector = self.strategy.compute_velocity(
                 self.current_joints,
                 self.q_goal,
                 env_data
             )
 
-            # === Stop Timer ===
             compute_duration = time.time() - t0
 
-            # === Calculate Minimum Clearance for Telemetry ===
             min_clearance = 999.0
             if env_data and hasattr(env_data, 'data'):
                 for link_data in env_data.data:
                     if link_data.min_distance < min_clearance:
                         min_clearance = link_data.min_distance
 
-            # Publish Telemetry: [ComputeTime, MinClearance, DistanceToGoal]
+            # Telemetry: [ComputeTime, MinClearance, CartesianDistanceToGoal]
             telemetry_msg = Float32MultiArray()
-            telemetry_msg.data = [float(compute_duration), float(min_clearance), float(dist_to_goal)]
+            telemetry_msg.data = [float(compute_duration), float(min_clearance), float(cart_dist)]
             self.pub_telemetry.publish(telemetry_msg)
 
             if velocity_vector is not None:

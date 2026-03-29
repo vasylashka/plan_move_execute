@@ -57,9 +57,12 @@ class XArmPlanningScene(Node):
             if p.getJointInfo(self.robot_id, i)[12].decode('utf-8') == 'link_tcp':
                 self.tcp_link_idx = i
 
-        # Publisher for Target Joints
+        # Publishers for Targets
         self.target_pub = self.create_publisher(Float32MultiArray, '/planning/target_joints', 10)
+        self.target_pose_pub = self.create_publisher(Float32MultiArray, '/planning/target_pose', 10)  # ADDED
+
         self.current_target_joints = [0.0] * 7
+        self.current_target_pose = [0.0] * 6  # [x, y, z, r, p, y] # ADDED
 
         # ROS Interface
         self.create_subscription(JointState, '/xarm/joint_states', self._sync_callback, 10)
@@ -74,6 +77,7 @@ class XArmPlanningScene(Node):
         if scenario_id == -1:
             with self.sim_lock:
                 self.current_target_joints = self.home_position
+                self.current_target_pose = [0.0] * 6  # Reset target pose
                 for uid in self.obstacle_ids: p.removeBody(uid)
                 self.obstacle_ids = []
             self.get_logger().info("Planner Target Reset to Current Position.")
@@ -105,23 +109,23 @@ class XArmPlanningScene(Node):
             if 'target_pose' in data:
                 tgt_raw = data['target_pose']
                 if len(tgt_raw) < 6: tgt_raw += [0.0] * (6 - len(tgt_raw))
+                self.current_target_pose = tgt_raw  # STORE CARTESIAN TARGET
+
                 t_pos = tgt_raw[:3]
                 t_quat = p.getQuaternionFromEuler(tgt_raw[3:6])
 
                 t_vis = p.createVisualShape(p.GEOM_SPHERE, radius=0.03, rgbaColor=[0, 1, 0, 0.8])
                 self.target_id = p.createMultiBody(baseMass=0, baseVisualShapeIndex=t_vis, basePosition=t_pos)
 
-                # 1. Dynamically get limits from the URDF to avoid clipping errors
                 lower_limits = []
                 upper_limits = []
                 joint_ranges = []
-                for idx in self.arm_indices:  # arm_indices from xarm_pybullet_simulator.py
+                for idx in self.arm_indices:
                     info = p.getJointInfo(self.robot_id, idx)
                     lower_limits.append(info[8])
                     upper_limits.append(info[9])
-                    joint_ranges.append(6.28)  # Allow full rotation within limits
+                    joint_ranges.append(6.28)
 
-                # 2. Use a high-precision IK call
                 joints = p.calculateInverseKinematics(
                     self.robot_id,
                     self.tcp_link_idx,
@@ -130,9 +134,9 @@ class XArmPlanningScene(Node):
                     lowerLimits=lower_limits,
                     upperLimits=upper_limits,
                     jointRanges=joint_ranges,
-                    restPoses=list(self.home_position),  # Use Cobra pose as a hint
-                    maxNumIterations=1000,  # Force high precision
-                    residualThreshold=1e-7  # Accuracy in meters
+                    restPoses=list(self.home_position),
+                    maxNumIterations=1000,
+                    residualThreshold=1e-7
                 )
                 self.current_target_joints = list(joints[:7])
 
@@ -145,9 +149,15 @@ class XArmPlanningScene(Node):
                 for i, angle in enumerate(self.current_joints):
                     p.resetJointState(self.robot_id, self.arm_indices[i], angle)
 
+        # Publish Joint Target
         out_msg = Float32MultiArray()
         out_msg.data = [float(x) for x in self.current_target_joints]
         self.target_pub.publish(out_msg)
+
+        # Publish Cartesian Target # ADDED
+        pose_msg = Float32MultiArray()
+        pose_msg.data = [float(x) for x in self.current_target_pose]
+        self.target_pose_pub.publish(pose_msg)
 
     def _srv_load_scenario(self, req, res):
         if req.scenario_index == -1 or 0 <= req.scenario_index < len(self.scenarios):
@@ -178,7 +188,6 @@ class XArmPlanningScene(Node):
         return res
 
     def _srv_get_apf_data(self, req, res):
-        # Critical links for collision checking (Arm)
         critical_links = [2, 4, 6, 9, 11, 14]
         link_names = {
             2: "Shoulder", 4: "Elbow", 6: "Wrist",

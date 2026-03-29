@@ -29,6 +29,8 @@ setup(
 
             # The Default Planner (Joint Space APF)
             'joint_space_apf_planner = xarm_local_planner.planners.default_planner:main',
+
+            'virtual_obstacle_apf_planner = xarm_local_planner.planners.virtual_obstacle_planner:main',
         ],
     },
 )

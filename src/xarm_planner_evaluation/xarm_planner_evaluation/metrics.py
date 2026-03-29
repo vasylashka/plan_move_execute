@@ -1,6 +1,5 @@
 import numpy as np
 
-
 class TrajectoryMetrics:
     def __init__(self):
         self.timestamps = []
@@ -19,10 +18,11 @@ class TrajectoryMetrics:
         self.latencies.append(latency)
         self.clearances.append(clearance)
 
-    def compute_all(self, target_pose=None):
+    def compute_all(self, target_pose=None, target_joints=None):
         """
         Computes performance metrics.
         :param target_pose: Optional np.array [x, y, z, r, p, y] for accuracy calculation.
+        :param target_joints: Optional np.array of 7 joint angles for joint accuracy calculation.
         """
         if len(self.positions) < 4:
             return None
@@ -70,13 +70,18 @@ class TrajectoryMetrics:
                          range(1, len(self.velocities))]
             max_vel_jump = np.max(vel_diffs)
 
-        # 4. Accuracy Metric: Final Position Error
+        # 4. Accuracy Metric: Final Position Error (Cartesian)
         final_dist_error = 0.0
         if target_pose is not None and len(self.ee_poses) > 0:
             # Calculate Euclidean distance using only [x, y, z] components
             final_ee_pos = np.array(self.ee_poses[-1][:3])
             target_pos = np.array(target_pose[:3])
             final_dist_error = float(np.linalg.norm(final_ee_pos - target_pos))
+
+        # 5. Accuracy Metric: Final Position Error (Joints)
+        final_joint_error = 0.0
+        if target_joints is not None and len(self.positions) > 0:
+            final_joint_error = float(np.linalg.norm(np.array(self.positions[-1]) - np.array(target_joints)))
 
         total_time = self.timestamps[-1] - self.timestamps[0]
 
@@ -87,5 +92,6 @@ class TrajectoryMetrics:
             "min_clearance": min_clearance,
             "smoothness_jerk": mean_squared_jerk,
             "continuity_max_vel_jump": max_vel_jump,
-            "final_distance_error": final_dist_error
+            "final_distance_error": final_dist_error,
+            "final_joint_error": final_joint_error
         }

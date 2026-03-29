@@ -54,6 +54,7 @@ class EvaluatorNode(Node):
         self.latest_latency = 0.0
         self.latest_clearance = 10.0
         self.latest_ee_pose = np.zeros(6)
+        self.latest_target_joints = np.zeros(7)
         self.current_metrics = None
 
         # ROS Interfaces
@@ -65,6 +66,8 @@ class EvaluatorNode(Node):
             Float32MultiArray, '/planning/telemetry', self._cb_telemetry, 10)
         self.sub_status = self.create_subscription(
             Bool, '/planning/status_reached', self._cb_status, 10)
+        self.sub_target_joints = self.create_subscription(
+            Float32MultiArray, '/planning/target_joints', self._cb_target_joints, 10)
 
         self.cli_load = self.create_client(LoadScenario, '/planning/load_scenario')
         self.cli_clean = self.create_client(Call, '/xarm/clean_error')
@@ -116,6 +119,11 @@ class EvaluatorNode(Node):
             elif self.scenario_active:
                 self.get_logger().info(f"Scenario {self.current_scenario_id} COMPLETED.")
                 self._finish_scenario(success=True)
+
+    def _cb_target_joints(self, msg):
+        """Captures the target joint configuration from the planner/scene."""
+        if len(msg.data) >= 7:
+            self.latest_target_joints = np.array(msg.data[:7])
 
     def _run_next_scenario(self):
         """Step 1: Initiate reset by clearing obstacles and setting target to Home."""
@@ -195,20 +203,27 @@ class EvaluatorNode(Node):
             if self.current_scenario_id < len(self.scenarios_data):
                 target = np.array(self.scenarios_data[self.current_scenario_id].get('target_pose'))
 
-            data = self.current_metrics.compute_all(target_pose=target)
+            data = self.current_metrics.compute_all(
+                target_pose=target,
+                target_joints=self.latest_target_joints
+            )
+
             if data:
                 data['scenario_id'] = self.current_scenario_id
                 data['success'] = success
                 self.results.append(data)
                 self.get_logger().info(
-                    f"Result S{self.current_scenario_id}: Success={success}, Error={data['final_distance_error']:.4f}m")
+                    f"Result S{self.current_scenario_id}: Success={success}, "
+                    f"Cartesian Error={data['final_distance_error']:.4f}m, "
+                    f"Joint Error={data['final_joint_error']:.4f}rad"
+                )
 
         # Wait 2 seconds before next reset sequence
         self.timer = self.create_timer(2.0, self._run_next_scenario)
 
     def _save_report(self):
         self.get_logger().info("Evaluation Finished. Saving report...")
-        with open('evaluation_results.json', 'w') as f:
+        with open('evaluation_result-0.1-joint_space.json', 'w') as f:
             json.dump(self.results, f, indent=4)
         print("Report Saved.")
 

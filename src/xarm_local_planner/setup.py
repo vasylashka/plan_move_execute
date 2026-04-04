@@ -34,7 +34,11 @@ setup(
 
             'weighted_joint_space_apf_planner = xarm_local_planner.planners.weighted_planner:main',
 
-            'virtual_hills_apf_planner = xarm_local_planner.planners.virtual_hills_planner:main'
+            'virtual_hills_apf_planner = xarm_local_planner.planners.virtual_hills_planner:main',
+
+            'vortex_apf_planner = xarm_local_planner.planners.vortex_planner:main',
+
+            'guided_vortex_apf_planner = xarm_local_planner.planners.guided_vortex_planner:main'
         ],
     },
 )

@@ -38,7 +38,9 @@ setup(
 
             'vortex_apf_planner = xarm_local_planner.planners.vortex_planner:main',
 
-            'guided_vortex_apf_planner = xarm_local_planner.planners.guided_vortex_planner:main'
+            'guided_vortex_apf_planner = xarm_local_planner.planners.guided_vortex_planner:main',
+
+            'beetle_apf_planner = xarm_local_planner.planners.beetle_planner:main',
         ],
     },
 )

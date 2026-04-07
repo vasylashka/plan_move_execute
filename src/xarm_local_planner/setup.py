@@ -43,6 +43,8 @@ setup(
             'beetle_apf_planner = xarm_local_planner.planners.beetle_planner:main',
 
             'pso_apf_planner = xarm_local_planner.planners.pso_planner:main',
+
+            'hybrid_apf_planner = xarm_local_planner.planners.hybrid_planner:main',
         ],
     },
 )

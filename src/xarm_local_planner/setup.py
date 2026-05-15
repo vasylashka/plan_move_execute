@@ -32,8 +32,6 @@ setup(
 
             'virtual_obstacle_apf_planner = xarm_local_planner.planners.virtual_obstacle_planner:main',
 
-            'weighted_joint_space_apf_planner = xarm_local_planner.planners.weighted_planner:main',
-
             'virtual_hills_apf_planner = xarm_local_planner.planners.virtual_hills_planner:main',
 
             'vortex_apf_planner = xarm_local_planner.planners.vortex_planner:main',

@@ -6,12 +6,10 @@ class VirtualHillsAPFPlanner(BaseLocalPlanner):
     def __init__(self):
         super().__init__('virtual_hills_apf_planner')
 
-        # Базові параметри APF
         self.declare_parameter('attraction_gain', 1.5)
         self.declare_parameter('repulsion_gain', 0.01)
         self.declare_parameter('influence_distance', 0.03)
 
-        # Параметри пагорбів
         self.declare_parameter('hill_height', 3.0)
         self.declare_parameter('hill_sigma', 0.15)
         self.declare_parameter('variance_threshold', 0.8)

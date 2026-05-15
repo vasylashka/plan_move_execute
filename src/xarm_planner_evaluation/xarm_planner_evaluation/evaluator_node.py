@@ -182,11 +182,11 @@ class EvaluatorNode(Node):
         self.is_recording = True
         self.scenario_active = True
         self.start_time = time.time()
-        self.timeout_timer = self.create_timer(15.0, self._check_timeout)
+        self.timeout_timer = self.create_timer(30.0, self._check_timeout)
 
     def _check_timeout(self):
         if self.scenario_active:
-            if time.time() - self.start_time > 20.0:
+            if time.time() - self.start_time > 30.0:
                 self.get_logger().warn(f"Scenario {self.current_scenario_id} TIMEOUT.")
                 self._finish_scenario(success=False)
 

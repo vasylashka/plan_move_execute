@@ -6,14 +6,12 @@ class VortexAPFPlanner(BaseLocalPlanner):
     def __init__(self):
         super().__init__('vortex_apf_planner')
 
-        # Реєстрація параметрів
         self.declare_parameter('attraction_gain', 1.5)
         self.declare_parameter('repulsion_gain', 0.01)
         self.declare_parameter('influence_distance', 0.05)
         self.declare_parameter('vortex_gain', 0.85)
-        self.declare_parameter('xi_max_multiplier', 3.0) # Параметр підсилення
+        self.declare_parameter('xi_max_multiplier', 3.0)
 
-        # Ініціалізація стратегії
         self.strategy = VortexAPFStrategy(
             xi=self.get_parameter('attraction_gain').value,
             eta=self.get_parameter('repulsion_gain').value,

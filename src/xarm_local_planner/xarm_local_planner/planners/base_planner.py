@@ -104,10 +104,8 @@ class BaseLocalPlanner(Node):
             if self.strategy is None:
                 continue
 
-            # === Cartesian Distance Calculation === # CHANGED
             cart_dist = np.linalg.norm(self.current_ee_pos - self.target_ee_pos)
 
-            # Stop if within 1cm of the Cartesian target
             if cart_dist < 0.025:
                 if not self.goal_reached_flag:
                     self.get_logger().info(f"Target Reached! Cartesian Distance: {cart_dist:.4f}m")
@@ -137,7 +135,6 @@ class BaseLocalPlanner(Node):
                     if link_data.min_distance < min_clearance:
                         min_clearance = link_data.min_distance
 
-            # Telemetry: [ComputeTime, MinClearance, CartesianDistanceToGoal]
             telemetry_msg = Float32MultiArray()
             telemetry_msg.data = [float(compute_duration), float(min_clearance), float(cart_dist)]
             self.pub_telemetry.publish(telemetry_msg)

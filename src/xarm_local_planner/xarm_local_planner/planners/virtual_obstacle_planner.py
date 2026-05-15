@@ -7,12 +7,10 @@ class VirtualObstacleAPFPlanner(BaseLocalPlanner):
     def __init__(self):
         super().__init__('virtual_obstacle_apf_planner')
 
-        # Standard APF params
         self.declare_parameter('attraction_gain', 1.5)
         self.declare_parameter('repulsion_gain', 0.01)
         self.declare_parameter('influence_distance', 0.03)
 
-        # Virtual Obstacle specific params
         self.declare_parameter('vo_repulsion_gain', 0.1)
         self.declare_parameter('vo_influence_dist', 1.0)
         self.declare_parameter('vo_stuck_window', 50)
@@ -20,7 +18,6 @@ class VirtualObstacleAPFPlanner(BaseLocalPlanner):
         self.declare_parameter('vo_oscillation_ratio', 3.0)
         self.declare_parameter('goal_tolerance', 0.1)  # NEW PARAMETER
 
-        # Initialize the strategy
         self.strategy = VirtualObstacleAPFStrategy(
             xi=self.get_parameter('attraction_gain').value,
             eta=self.get_parameter('repulsion_gain').value,

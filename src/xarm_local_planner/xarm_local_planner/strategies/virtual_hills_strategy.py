@@ -10,9 +10,9 @@ class VirtualHillsAPFStrategy(BaseAPFStrategy):
                  stuck_threshold: float = 0.02,
                  variance_threshold: float = 0.8,
                  goal_tolerance: float = 0.1,
-                 xi_max_multiplier: float = 3.0):  # Новий параметр
+                 xi_max_multiplier: float = 3.0):
 
-        self.xi = xi  # Базовий коефіцієнт
+        self.xi = xi
         self.eta = eta
         self.rho0 = rho0
 
@@ -33,19 +33,14 @@ class VirtualHillsAPFStrategy(BaseAPFStrategy):
         error = q_curr - q_goal
         dist_to_goal = np.linalg.norm(error)
 
-        # 1. Динамічне посилення притягання (Adaptive Attraction)
-        # Чим менша дистанція, тим більший xi, але не більше ніж xi * xi_max_multiplier
-        # Формула: xi_eff = xi * (1 + (M-1) * (1 - dist/influence_radius))
         adaptive_scale = 1.0
-        if dist_to_goal < 0.5:  # Починаємо посилення за 0.5 рад до цілі
-            # Плавне збільшення від 1.0 до xi_max_multiplier
+        if dist_to_goal < 0.5:
             adaptive_scale = 1.0 + (self.xi_max_multiplier - 1.0) * (1.0 - dist_to_goal / 0.5)
             adaptive_scale = np.clip(adaptive_scale, 1.0, self.xi_max_multiplier)
 
         xi_effective = self.xi * adaptive_scale
         tau_att = -xi_effective * error
 
-        # 2. Обчислення сил відштовхування
         tau_rep = np.zeros(7)
         if env_data and env_data.data:
             for link_data in env_data.data:
@@ -66,7 +61,6 @@ class VirtualHillsAPFStrategy(BaseAPFStrategy):
 
         tau_net = tau_att + tau_rep
 
-        # 3. Детекція локального мінімуму (Stuck + Variance)
         if dist_to_goal > self.goal_tolerance:
             force_norm = np.linalg.norm(tau_net)
             if force_norm > 1e-9:
@@ -75,7 +69,6 @@ class VirtualHillsAPFStrategy(BaseAPFStrategy):
             self.position_history.append(q_curr.copy())
 
             if len(self.position_history) == self.stuck_window:
-                # Перевірка на осциляцію
                 alignment_score = 1.0
                 if len(self.force_history) == self.stuck_window:
                     avg_direction = np.mean(self.force_history, axis=0)
@@ -83,7 +76,6 @@ class VirtualHillsAPFStrategy(BaseAPFStrategy):
 
                 is_oscillating = alignment_score < (1.0 - self.variance_threshold)
 
-                # Перевірка на зупинку
                 path_length = sum(np.linalg.norm(self.position_history[i] - self.position_history[i - 1])
                                   for i in range(1, len(self.position_history)))
                 is_stopped = path_length < self.stuck_threshold
@@ -96,7 +88,6 @@ class VirtualHillsAPFStrategy(BaseAPFStrategy):
             self.force_history.clear()
             self.position_history.clear()
 
-        # 4. Вплив пагорбів
         tau_hills = np.zeros(7)
         for q_hill in self.virtual_hills:
             diff = q_curr - q_hill

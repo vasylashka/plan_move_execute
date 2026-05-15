@@ -14,22 +14,19 @@ class DefaultBeetleStrategy(BaseAPFStrategy):
         self.eta = eta
         self.rho0 = rho0
 
-        # Параметри Beetle Antennae Search
         self.bas_d = bas_d
         self.bas_recovery_steps = bas_steps
         self.current_recovery_step = 0
 
-        # Параметри детекції Stuck + Oscillation
         self.goal_tolerance = goal_tolerance
         self.stuck_threshold = stuck_threshold
         self.variance_threshold = variance_threshold
         self.stuck_window = 50
 
         self.position_history = deque(maxlen=self.stuck_window)
-        self.force_history = deque(maxlen=self.stuck_window)  # Історія векторів сил
+        self.force_history = deque(maxlen=self.stuck_window)
 
     def _get_potential(self, q, q_goal, env_data):
-        """Оцінка потенціалу для BAS"""
         dist_to_goal = np.linalg.norm(q - q_goal)
         u_att = 0.5 * self.xi * (dist_to_goal ** 2)
 
@@ -45,7 +42,6 @@ class DefaultBeetleStrategy(BaseAPFStrategy):
         error_q = q_goal - q_curr
         dist_to_goal = np.linalg.norm(error_q)
 
-        # --- Розрахунок стандартного APF вектора (для детекції осциляцій) ---
         tau_att = self.xi * error_q
         tau_rep = np.zeros(7)
 
@@ -67,9 +63,7 @@ class DefaultBeetleStrategy(BaseAPFStrategy):
 
         tau_net = tau_att + tau_rep
 
-        # --- Детекція осциляцій та застрягання ---
         if dist_to_goal > self.goal_tolerance:
-            # Зберігаємо нормалізований вектор сили для аналізу стабільності
             net_norm = np.linalg.norm(tau_net)
             if net_norm > 1e-9:
                 self.force_history.append(tau_net / net_norm)
@@ -77,13 +71,10 @@ class DefaultBeetleStrategy(BaseAPFStrategy):
             self.position_history.append(q_curr.copy())
 
             if len(self.position_history) == self.stuck_window:
-                # 1. Перевірка на зупинку (Stuck)
                 path_len = sum(np.linalg.norm(self.position_history[i] - self.position_history[i - 1])
                                for i in range(1, self.stuck_window))
                 is_stopped = path_len < self.stuck_threshold
 
-                # 2. Перевірка на осциляцію (Alignment)
-                # Якщо середня сума векторів мала — вектори "б'ються" один об одного
                 alignment_score = 1.0
                 if len(self.force_history) == self.stuck_window:
                     avg_force_direction = np.mean(self.force_history, axis=0)
@@ -101,7 +92,6 @@ class DefaultBeetleStrategy(BaseAPFStrategy):
             self.force_history.clear()
             self.position_history.clear()
 
-        # --- Вибір режиму руху ---
         if self.current_recovery_step > 0:
             self.current_recovery_step -= 1
             b = np.random.randn(7)

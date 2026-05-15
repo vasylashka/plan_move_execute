@@ -7,14 +7,12 @@ class VortexAPFStrategy(BaseAPFStrategy):
         self.eta = eta
         self.rho0 = rho0
         self.gamma = gamma
-        self.xi_max_multiplier = xi_max_multiplier # Максимальний множник підсилення
+        self.xi_max_multiplier = xi_max_multiplier
 
     def compute_velocity(self, q_curr, q_goal, env_data):
-        # 1. Адаптивне притягання (Dynamic Attraction Gain)
         error = q_curr - q_goal
         dist_to_goal = np.linalg.norm(error)
 
-        # Логіка як у Virtual Hills: підсилюємо xi, якщо дистанція менша за 0.5 рад
         adaptive_scale = 1.0
         if dist_to_goal < 0.5:
             adaptive_scale = 1.0 + (self.xi_max_multiplier - 1.0) * (1.0 - dist_to_goal / 0.5)
@@ -23,7 +21,6 @@ class VortexAPFStrategy(BaseAPFStrategy):
         xi_effective = self.xi * adaptive_scale
         tau_att = -xi_effective * error
 
-        # 2. Сила відштовхування та вихрова компонента (без змін)
         tau_rep = np.zeros(7)
 
         if env_data and env_data.data:
@@ -41,7 +38,6 @@ class VortexAPFStrategy(BaseAPFStrategy):
                     if norm > 1e-6:
                         dir_to_obs /= norm
 
-                    # Вихровий вектор (ковзання)
                     vortex_vec = np.cross(dir_to_obs, np.array([0, 0, 1]))
                     v_norm = np.linalg.norm(vortex_vec)
                     if v_norm > 1e-6:

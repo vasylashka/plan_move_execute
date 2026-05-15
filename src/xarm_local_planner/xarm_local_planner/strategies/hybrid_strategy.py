@@ -17,7 +17,6 @@ class HybridVortexVOStrategy(BaseAPFStrategy):
         self.xi_max_multiplier = xi_max_multiplier
         self.goal_tolerance = goal_tolerance
 
-        # Virtual Obstacle Detection Parameters
         self.stuck_window = 25
         self.stuck_threshold = 0.1
         self.oscillation_ratio = 3.0
@@ -25,7 +24,6 @@ class HybridVortexVOStrategy(BaseAPFStrategy):
         self.virtual_obstacles = []
 
     def compute_velocity(self, q_curr, q_goal, env_data):
-        # 1. Adaptive Attraction
         error_q = q_goal - q_curr
         dist_to_goal = np.linalg.norm(error_q)
 
@@ -37,8 +35,6 @@ class HybridVortexVOStrategy(BaseAPFStrategy):
         xi_effective = self.xi * adaptive_scale
         tau_att = xi_effective * error_q
 
-        # 2. Guided Vortex Repulsion (Sliding)
-        # Damping near goal to prevent oscillations
         repulsion_scale = 1.0
         if dist_to_goal < self.goal_tolerance:
             repulsion_scale = dist_to_goal / self.goal_tolerance
@@ -59,12 +55,10 @@ class HybridVortexVOStrategy(BaseAPFStrategy):
                     if len(full_jac) == 0: continue
                     J = full_jac.reshape(3, len(full_jac) // 3)[:, :7]
 
-                    # Map goal direction to Cartesian for the vortex component
                     v_goal = np.dot(J, error_q)
                     v_goal_norm = np.linalg.norm(v_goal)
                     if v_goal_norm > 1e-6: v_goal /= v_goal_norm
 
-                    # Project goal onto the tangent plane of the obstacle
                     v_tangent = v_goal - np.dot(v_goal, n) * n
                     v_tan_norm = np.linalg.norm(v_tangent)
                     if v_tan_norm > 1e-6: v_tangent /= v_tan_norm
@@ -74,7 +68,6 @@ class HybridVortexVOStrategy(BaseAPFStrategy):
                     F_slide = self.epsilon * mag_rep * v_tangent * repulsion_scale
                     tau_rep += np.dot(J.T, F_normal + F_slide)
 
-        # 3. Virtual Obstacle Detection
         if dist_to_goal > self.goal_tolerance:
             self.position_history.append(q_curr.copy())
             if len(self.position_history) == self.stuck_window:
@@ -93,7 +86,6 @@ class HybridVortexVOStrategy(BaseAPFStrategy):
         else:
             self.position_history.clear()
 
-        # 4. Virtual Obstacle Repulsion
         tau_vo = np.zeros(7)
         for q_vo in self.virtual_obstacles:
             vo_dist = np.linalg.norm(q_curr - q_vo)

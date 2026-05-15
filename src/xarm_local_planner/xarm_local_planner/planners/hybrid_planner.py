@@ -7,21 +7,17 @@ class HybridVortexVOPlanner(BaseLocalPlanner):
     def __init__(self):
         super().__init__('hybrid_vortex_vo_planner')
 
-        # Core APF parameters
         self.declare_parameter('attraction_gain', 2.5)
         self.declare_parameter('repulsion_gain', 0.01)
         self.declare_parameter('influence_distance', 0.03)
 
-        # Virtual Obstacle parameters
         self.declare_parameter('vo_repulsion_gain', 0.5)
         self.declare_parameter('vo_influence_dist', 1.5)
         self.declare_parameter('goal_tolerance', 0.12)
 
-        # Guided Vortex & Adaptive parameters
         self.declare_parameter('epsilon', 0.8)
         self.declare_parameter('xi_max_multiplier', 3.0)
 
-        # Initialize the strategy without joint weighting
         self.strategy = HybridVortexVOStrategy(
             xi=self.get_parameter('attraction_gain').value,
             eta=self.get_parameter('repulsion_gain').value,

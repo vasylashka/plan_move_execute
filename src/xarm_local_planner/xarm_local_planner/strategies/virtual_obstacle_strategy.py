@@ -8,7 +8,7 @@ class VirtualObstacleAPFStrategy(BaseAPFStrategy):
                  vo_eta: float = 0.5, vo_rho0: float = 1.0,
                  stuck_window: int = 50, stuck_threshold: float = 0.05,
                  oscillation_ratio: float = 3.0,
-                 goal_tolerance: float = 0.1):  # NEW PARAMETER
+                 goal_tolerance: float = 0.1):
 
         self.xi = xi
         self.eta = eta
@@ -19,17 +19,15 @@ class VirtualObstacleAPFStrategy(BaseAPFStrategy):
         self.stuck_window = stuck_window
         self.stuck_threshold = stuck_threshold
         self.oscillation_ratio = oscillation_ratio
-        self.goal_tolerance = goal_tolerance  # NEW PARAMETER
+        self.goal_tolerance = goal_tolerance
 
         self.position_history = deque(maxlen=self.stuck_window)
         self.virtual_obstacles = []
 
     def compute_velocity(self, q_curr, q_goal, env_data):
-        # 1. Standard Attraction Force
         error = q_curr - q_goal
         tau_att = -self.xi * error
 
-        # 2. Standard Repulsion Force (from real obstacles)
         tau_rep = np.zeros(7)
         if env_data and env_data.data:
             for link_data in env_data.data:
@@ -55,7 +53,7 @@ class VirtualObstacleAPFStrategy(BaseAPFStrategy):
                         tau_link = np.dot(J_arm.T, F_cart)
                         tau_rep += tau_link
 
-        # 3. Detect Local Minimum (ONLY if we are far enough from the goal)
+
         dist_to_goal = np.linalg.norm(error)
 
         if dist_to_goal > self.goal_tolerance:
@@ -78,10 +76,8 @@ class VirtualObstacleAPFStrategy(BaseAPFStrategy):
                         f"[VirtualObstacleStrategy] {reason} detected! Dropped Virtual Obstacle #{len(self.virtual_obstacles)}")
                     self.position_history.clear()
         else:
-            # Clear history so we don't accidentally trigger if the goal moves later
             self.position_history.clear()
 
-            # 4. Virtual Obstacle Repulsion
         tau_vo = np.zeros(7)
         for q_vo in self.virtual_obstacles:
             vo_dist = np.linalg.norm(q_curr - q_vo)

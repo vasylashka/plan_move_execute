@@ -11,10 +11,9 @@ class DefaultBeetlePlanner(BaseLocalPlanner):
         self.declare_parameter('repulsion_gain', 0.01)
         self.declare_parameter('influence_distance', 0.05)
 
-        # Параметри BAS та детекції
         self.declare_parameter('bas_antenna_dist', 0.3)
         self.declare_parameter('bas_recovery_steps', 60)
-        self.declare_parameter('variance_threshold', 0.85)  # Наскільки чутливо реагувати на осциляції
+        self.declare_parameter('variance_threshold', 0.85)
         self.declare_parameter('goal_tolerance', 0.1)
 
         self.strategy = DefaultBeetleStrategy(

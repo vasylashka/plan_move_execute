@@ -8,7 +8,7 @@ class JointSpaceAPFPlanner(BaseLocalPlanner):
         super().__init__('joint_space_apf_planner')
 
         # Declare specific APF params
-        self.declare_parameter('attraction_gain', 3.5)
+        self.declare_parameter('attraction_gain', 1.5)
         self.declare_parameter('repulsion_gain', 0.01)
         self.declare_parameter('influence_distance', 0.03)
 
